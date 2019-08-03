@@ -122,7 +122,7 @@ class A2CAgent(BaseAgent):
     def act(self, obs, action_space):
 
         # choose an action based on the probability
-        state = self.get_state_from_obs(self.extract_observable_board(obs))
+        state = self.get_state_from_obs(obs)
         action_values, state_value = self.policy(state)
         m = Categorical(action_values)
         action = m.sample()
@@ -151,7 +151,11 @@ class A2CAgent(BaseAgent):
         # reshape reward
         self.saved_rewards = [0] * len(self.saved_obs)
         # final reward is given by the environment
-        self.saved_rewards[-1] = reward * self.WIN_LOSE_MULTIPLIER
+        if reward < 0:
+            self.saved_rewards[-1] = -100
+        else:
+            self.saved_rewards[-1] = 5
+
         # fill in the reshaped rewards for each states except the final state
         # self.fill_in_rewards()
 
@@ -292,10 +296,6 @@ class A2CAgent(BaseAgent):
 
         # concat together, and convert to batch format
         return torch.cat((board, bomb_life, bomb_blast_strength, extra_info), dim=0).unsqueeze(0).to(self.device)
-
-    def extract_observable_board(self, obs):
-        # later to extract only observable area
-        return obs
 
     def reset_agent_id(self):
         if self.my_id == -1 and len(self.saved_obs) > 0:
