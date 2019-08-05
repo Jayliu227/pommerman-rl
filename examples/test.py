@@ -56,10 +56,11 @@ def main():
 
             plot_figure(win_rates)
 
+    print('Average win rate is: ', sum(win_rates) / len(win_rates))
     env.close()
 
 
-def plot_figure(win_rates, path='C:\\Users\\Jingyu Liu\\Documents\\ML\\win_rate.png'):
+def plot_figure(win_rates, path='C:\\Users\\Jingyu Liu\\Documents\\pommerman-rl\\win_rate.png'):
     plt.plot(win_rates)
     plt.xlabel('per 50 episodes')
     plt.ylabel('winning rate')

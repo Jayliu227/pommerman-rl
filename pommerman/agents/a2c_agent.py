@@ -94,12 +94,11 @@ class A2CAgent(BaseAgent):
         self.GAMMA = 0.99
         self.SAVE_FREQ = 200
 
-        self.EXTRA_BOMB_REWARD = 1
-        self.RANGE_UP_REWARD = 2
-        self.KICK_ENABLED_REWARD = 3
-        self.STAY_PUT_REWARD = -0.5
-        self.LAY_BOMB_REWARD = 4
-        self.AVOID_BOMB_REWARD = 5
+        self.EXTRA_BOMB_REWARD = 10
+        self.RANGE_UP_REWARD = 5
+        self.KICK_ENABLED_REWARD = 5
+        self.LAY_BOMB_REWARD = 10
+        self.AVOID_BOMB_REWARD = 10
 
         self.WIN_LOSE_MULTIPLIER = 7
 
@@ -117,7 +116,7 @@ class A2CAgent(BaseAgent):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.optimizer = optim.Adam(self.policy.parameters(), lr=3e-2)
-        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=100, gamma=0.95)
+        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=100, gamma=0.99)
 
     def act(self, obs, action_space):
 
@@ -133,31 +132,40 @@ class A2CAgent(BaseAgent):
 
         # TEST:
         # a = action_space.sample()
-        #
+
         # print('board:\n', obs['board'])
         # print('bomb_life:\n', obs['bomb_life'])
         # print('action_taken: ', constants.Action(a[0]).name)
         # print('\n')
+
+        # if self.save_counter == 0:
+        #     a = constants.Action.Bomb.value
+        # elif self.save_counter == 1:
+        #     a = constants.Action.Right.value
+        # elif self.save_counter == 2:
+        #     a = constants.Action.Down.value
+        # else:
+        #     a = constants.Action.Stop.value
         #
+        # self.save_counter += 1
         # return a
         # END_TEST;
 
         return action.item()
 
     def episode_end(self, reward):
-
         self.reset_agent_id()
 
         # reshape reward
         self.saved_rewards = [0] * len(self.saved_obs)
         # final reward is given by the environment
         if reward < 0:
-            self.saved_rewards[-1] = -100
+            self.saved_rewards[-1] = -200
         else:
-            self.saved_rewards[-1] = 5
+            self.saved_rewards[-1] = 50
 
         # fill in the reshaped rewards for each states except the final state
-        # self.fill_in_rewards()
+        self.fill_in_rewards()
 
         policy_losses = []
         value_losses = []
@@ -169,7 +177,7 @@ class A2CAgent(BaseAgent):
             R = r + self.GAMMA * R
             returns.insert(0, R)
 
-        # TEST:
+        # # TEST:
         # print('rewards: ', self.saved_rewards)
         # print('returns: ', returns)
         #
@@ -191,8 +199,6 @@ class A2CAgent(BaseAgent):
             value_losses.append(F.smooth_l1_loss(value, torch.tensor([[r]])))
 
         # optimize policy network and value network together
-        # self.scheduler.step()
-
         self.optimizer.zero_grad()
         policy_loss = torch.stack(policy_losses).sum()
         value_loss = torch.stack(value_losses).sum()
@@ -203,11 +209,6 @@ class A2CAgent(BaseAgent):
         del self.saved_rewards[:]
         del self.saved_actions[:]
         del self.saved_obs[:]
-
-        self.save_counter += 1
-        if self.save_counter % self.SAVE_FREQ == 0:
-
-            self.save_counter = 0
 
         print(f'Episode loss: policy loss <{abs(policy_loss.item()):.02f}>, '
               f'value loss <{abs(value_loss.item()):.02f}>; ')
@@ -235,15 +236,61 @@ class A2CAgent(BaseAgent):
                 total_reward += self.RANGE_UP_REWARD
                 self.debug_print('REWARD: collected strength!')
 
-            # 2. rewards for movements
-            cur_x = cur_obs['position'][0]
-            cur_y = cur_obs['position'][1]
-            if next_obs['board'][cur_x][cur_y] == constants.Item.Flames:
-                # avoid bomb, current action avoids being killed
-                total_reward += self.AVOID_BOMB_REWARD
-                self.debug_print('REWARD: avoid bomb!')
+            # 2. rewards for bomb-avoiding movements
+            '''
+                we first figure out if we move at this point
+                if we moved, then we need to check if this move puts us
+                into a safe zone with a specific vision range
+                    OOOOOOO
+                    OOOOOOO
+                    OOOXOOO
+                    OOOOOOO
+                    OOOOOOO
+                vision range is the square diameter we will be looking at, 
+                if we can move to a place where the number of bombs we will be
+                exposed to is fewer than before, we gain rewards.
+            '''
+
+            vision_range = 3
+            safe_time = 3
+            cur_pos = cur_obs['position']
+            next_pos = next_obs['position']
+
+            def clip_coord(x):
+                return min(max(0, x), constants.BOARD_SIZE - 1)
+
+            def dist(a, b, c, d):
+                return abs(a - c) + abs(b - d)
+
+            def cal_bomb_overlap(obs, x_pos, y_pos):
+                board = obs['board']
+                strength_map = obs['bomb_blast_strength']
+                life_map = obs['bomb_life']
+                num = 0
+
+                for x in range(clip_coord(x_pos - vision_range), clip_coord(x_pos + vision_range) + 1):
+                    for y in range(clip_coord(y_pos - vision_range), clip_coord(y_pos + vision_range) + 1):
+                        if (x == x_pos or y == y_pos) and board[x][y] == constants.Item.Bomb.value:
+                            # if the bomb and us are in the same line
+                            strength = strength_map[x][y]
+                            life = life_map[x][y]
+                            if strength >= dist(x, y, x_pos, y_pos) and life <= safe_time:
+                                # and we are in the range
+                                num += 1
+                return num
+
+            if cur_pos[0] != next_pos[0] or cur_pos[1] != next_pos[1]:
+                # in this case, we moved at current state
+                cur_bomb_expose_num = cal_bomb_overlap(cur_obs, cur_pos[0], cur_pos[1])
+                next_bomb_expose_num = cal_bomb_overlap(next_obs, next_pos[0], next_pos[1])
+                if next_bomb_expose_num < cur_bomb_expose_num:
+                    total_reward += self.AVOID_BOMB_REWARD * (cur_bomb_expose_num - next_bomb_expose_num)
+                    self.debug_print('REWARD: avoid bomb!')
 
             # 3. rewards for laying bombs
+            cur_x = cur_obs['position'][0]
+            cur_y = cur_obs['position'][1]
+
             def is_fogged_out(board, x, y):
                 return board[x][y] == constants.Item.Fog.value
 
