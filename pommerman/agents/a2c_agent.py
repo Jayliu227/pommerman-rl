@@ -118,6 +118,9 @@ class A2CAgent(BaseAgent):
         self.optimizer = optim.Adam(self.policy.parameters(), lr=3e-2)
         self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=100, gamma=0.99)
 
+        if not self.training:
+            self.load_model()
+
     def act(self, obs, action_space):
 
         # choose an action based on the probability
@@ -126,9 +129,10 @@ class A2CAgent(BaseAgent):
         m = Categorical(action_values)
         action = m.sample()
 
-        # save the chosen action probability and the value of the state
-        self.saved_actions.append(SavedAction(m.log_prob(action), state_value))
-        self.saved_obs.append(obs)
+        if self.training:
+            # save the chosen action probability and the value of the state
+            self.saved_actions.append(SavedAction(m.log_prob(action), state_value))
+            self.saved_obs.append(obs)
 
         # TEST:
         # a = action_space.sample()
@@ -154,13 +158,17 @@ class A2CAgent(BaseAgent):
         return action.item()
 
     def episode_end(self, reward):
+
+        if not self.training:
+            return
+
         self.reset_agent_id()
 
         # reshape reward
         self.saved_rewards = [0] * len(self.saved_obs)
         # final reward is given by the environment
         if reward < 0:
-            self.saved_rewards[-1] = -200
+            self.saved_rewards[-1] = -150
         else:
             self.saved_rewards[-1] = 50
 
@@ -209,6 +217,8 @@ class A2CAgent(BaseAgent):
         del self.saved_rewards[:]
         del self.saved_actions[:]
         del self.saved_obs[:]
+
+        self.save_model()
 
         print(f'Episode loss: policy loss <{abs(policy_loss.item()):.02f}>, '
               f'value loss <{abs(value_loss.item()):.02f}>; ')
@@ -350,10 +360,12 @@ class A2CAgent(BaseAgent):
             self.my_id = (self.teammate_id - 8) % 4 + 10
             self.enemies_ids = [(self.my_id - 9) % 4 + 10, (self.teammate_id - 9) % 4 + 10]
 
-    def save_model(self, path):
+    def save_model(self, name='saved_model'):
+        path = os.path.join(os.path.dirname(__file__), name)
         torch.save(self.policy.state_dict(), path)
 
-    def load_model(self, path):
+    def load_model(self, name='saved_model'):
+        path = os.path.join(os.path.dirname(__file__), name)
         self.policy.load_state_dict(torch.load(path))
         self.policy.eval()
 
