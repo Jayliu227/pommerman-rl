@@ -133,7 +133,12 @@ class A2CAgent(BaseAgent):
         # choose an action based on the probability
         state = self.get_state_from_obs(obs)
         action_values, state_value = self.policy(state)
+
         m = Categorical(action_values)
+        if self.training and np.random.uniform() < (1.0 - self.EPSILON):
+            # if we're at training mode, then we do epsilon-greedy policy
+            m = Categorical(torch.FloatTensor([[1.0 / 6] * 6]))
+
         action = m.sample()
 
         if self.training:
@@ -141,11 +146,6 @@ class A2CAgent(BaseAgent):
             self.saved_actions.append(SavedAction(m.log_prob(action), state_value))
             self.saved_obs.append(obs)
 
-            # epsilon greedy
-            if np.random.uniform() < (1.0 - self.EPSILON):
-                action = action_space.sample()
-            else:
-                action = action.item()
         # TEST:
         # a = action_space.sample()
 
@@ -167,7 +167,7 @@ class A2CAgent(BaseAgent):
         # return a
         # END_TEST;
 
-        return action
+        return action.item()
 
     def episode_end(self, reward):
 
