@@ -2,7 +2,6 @@ from . import BaseAgent
 from pommerman import constants
 
 import os
-import sys
 
 import numpy as np
 from collections import namedtuple
@@ -15,6 +14,7 @@ from torch.distributions import Categorical
 
 SavedAction = namedtuple('SavedAction', ['log_prob', 'value'])
 eps = np.finfo(np.float32).eps.item()
+label = 1
 
 
 class Policy(nn.Module):
@@ -86,13 +86,18 @@ class A2CAgent(BaseAgent):
     def __init__(self, *args, **kwargs):
         super(A2CAgent, self).__init__(*args, **kwargs)
 
+        global label
+        self.label = label
+        label += 1
+
         self.save_counter = 0
         self.training = True
         self.debug_mode = False
 
         # constants
         self.GAMMA = 0.99
-        self.SAVE_FREQ = 200
+        self.SAVE_FREQ = 50
+        self.EPSILON = 0.90
 
         self.EXTRA_BOMB_REWARD = 10
         self.RANGE_UP_REWARD = 5
@@ -115,8 +120,10 @@ class A2CAgent(BaseAgent):
         self.policy = Policy()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        self.optimizer = optim.Adam(self.policy.parameters(), lr=3e-2)
+        self.optimizer = optim.Adam(self.policy.parameters(), lr=3e-3)
         self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=100, gamma=0.99)
+
+        self.model_name = 'vs_simple_agent_%d_2000_episode' % self.label
 
         if not self.training:
             self.load_model()
@@ -134,6 +141,11 @@ class A2CAgent(BaseAgent):
             self.saved_actions.append(SavedAction(m.log_prob(action), state_value))
             self.saved_obs.append(obs)
 
+            # epsilon greedy
+            if np.random.uniform() < (1.0 - self.EPSILON):
+                action = action_space.sample()
+            else:
+                action = action.item()
         # TEST:
         # a = action_space.sample()
 
@@ -155,7 +167,7 @@ class A2CAgent(BaseAgent):
         # return a
         # END_TEST;
 
-        return action.item()
+        return action
 
     def episode_end(self, reward):
 
@@ -169,8 +181,10 @@ class A2CAgent(BaseAgent):
         # final reward is given by the environment
         if reward < 0:
             self.saved_rewards[-1] = -150
-        else:
+        elif reward > 0:
             self.saved_rewards[-1] = 50
+        else:
+            self.saved_rewards[-1] = -50
 
         # fill in the reshaped rewards for each states except the final state
         self.fill_in_rewards()
@@ -197,6 +211,7 @@ class A2CAgent(BaseAgent):
         # END_TEST;
 
         # normalize returns
+
         returns = torch.tensor(returns)
         returns = (returns - returns.mean()) / (returns.std() + eps)
 
@@ -210,7 +225,7 @@ class A2CAgent(BaseAgent):
         self.optimizer.zero_grad()
         policy_loss = torch.stack(policy_losses).sum()
         value_loss = torch.stack(value_losses).sum()
-        loss = policy_loss + value_loss
+        loss = policy_loss + value_loss * 2.0
         loss.backward()
         self.optimizer.step()
 
@@ -218,7 +233,9 @@ class A2CAgent(BaseAgent):
         del self.saved_actions[:]
         del self.saved_obs[:]
 
-        self.save_model()
+        if self.save_counter % self.SAVE_FREQ == 0:
+            self.save_model()
+        self.save_counter += 1
 
         print(f'Episode loss: policy loss <{abs(policy_loss.item()):.02f}>, '
               f'value loss <{abs(value_loss.item()):.02f}>; ')
@@ -360,12 +377,12 @@ class A2CAgent(BaseAgent):
             self.my_id = (self.teammate_id - 8) % 4 + 10
             self.enemies_ids = [(self.my_id - 9) % 4 + 10, (self.teammate_id - 9) % 4 + 10]
 
-    def save_model(self, name='saved_model'):
-        path = os.path.join(os.path.dirname(__file__), name)
+    def save_model(self):
+        path = os.path.join(os.path.dirname(__file__), 'saved_model', self.model_name)
         torch.save(self.policy.state_dict(), path)
 
-    def load_model(self, name='saved_model'):
-        path = os.path.join(os.path.dirname(__file__), name)
+    def load_model(self):
+        path = os.path.join(os.path.dirname(__file__), 'saved_model', self.model_name)
         self.policy.load_state_dict(torch.load(path))
         self.policy.eval()
 
