@@ -97,7 +97,7 @@ class A2CAgent(BaseAgent):
         # constants
         self.GAMMA = 0.99
         self.SAVE_FREQ = 50
-        self.EPSILON = 0.90
+        self.EPSILON = 0.10
 
         self.EXTRA_BOMB_REWARD = 10
         self.RANGE_UP_REWARD = 5
@@ -123,7 +123,7 @@ class A2CAgent(BaseAgent):
         self.optimizer = optim.Adam(self.policy.parameters(), lr=3e-3)
         self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=100, gamma=0.99)
 
-        self.model_name = 'vs_simple_agent_%d_2000_episode' % self.label
+        self.model_name = 'vs_simple_%d_5000_episodes' % self.label
 
         if not self.training:
             self.load_model()
@@ -135,13 +135,12 @@ class A2CAgent(BaseAgent):
         action_values, state_value = self.policy(state)
 
         m = Categorical(action_values)
-        if self.training and np.random.uniform() < (1.0 - self.EPSILON):
-            # if we're at training mode, then we do epsilon-greedy policy
-            m = Categorical(torch.FloatTensor([[1.0 / 6] * 6]))
-
         action = m.sample()
 
         if self.training:
+            # epsilon-greedy
+            if np.random.uniform() < self.EPSILON:
+                action = torch.IntTensor([np.random.randint(0, 6)])
             # save the chosen action probability and the value of the state
             self.saved_actions.append(SavedAction(m.log_prob(action), state_value))
             self.saved_obs.append(obs)
@@ -236,6 +235,10 @@ class A2CAgent(BaseAgent):
         if self.save_counter % self.SAVE_FREQ == 0:
             self.save_model()
         self.save_counter += 1
+
+        # decaying epsilon
+        if self.save_counter > 1000 and self.save_counter % 100 == 0:
+            self.EPSILON *= 0.99
 
         print(f'Episode loss: policy loss <{abs(policy_loss.item()):.02f}>, '
               f'value loss <{abs(value_loss.item()):.02f}>; ')
