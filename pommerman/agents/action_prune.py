@@ -247,7 +247,7 @@ def _check_if_flame_will_gone(obs, prev_two_obs, flame_pos):
     return True
 
 
-def _compute_safe_actions(obs, exclude_kicking=False, prev_two_obs=(None, None)):
+def _compute_safe_actions(obs, exclude_kicking=False, prev_two_obs=[None, None]):
     dirs = _all_directions(exclude_stop=True)
     ret = set()
     my_position, board, blast_st, bomb_life, can_kick = obs['position'], obs['board'], obs['bomb_blast_strength'], obs[
@@ -331,7 +331,7 @@ def _compute_safe_actions(obs, exclude_kicking=False, prev_two_obs=(None, None))
     return ret
 
 
-def get_filtered_actions(obs, prev_two_obs=None):
+def get_filtered_actions(obs, prev_two_obs=[None, None]):
     if obs['board'][obs['position']] not in obs['alive']:
         return [constants.Action.Stop.value]
     obs_cpy = copy.deepcopy(obs)

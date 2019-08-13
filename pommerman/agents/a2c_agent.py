@@ -1,4 +1,5 @@
 from . import BaseAgent
+from . import action_prune
 from pommerman import constants
 
 import os
@@ -130,7 +131,6 @@ class A2CAgent(BaseAgent):
             self.load_model()
 
     def act(self, obs, action_space):
-
         # choose an action based on the probability
         state = self.get_state_from_obs(obs)
         action_values, state_value = self.policy(state)
@@ -171,7 +171,6 @@ class A2CAgent(BaseAgent):
         return action.item()
 
     def episode_end(self, reward):
-
         if not self.training:
             return
 
@@ -387,3 +386,20 @@ class A2CAgent(BaseAgent):
     def debug_print(self, string):
         if self.debug_mode:
             print(string)
+
+
+class SmartRandomAgent(BaseAgent):
+    """
+        This agent uses the Action-Filter by Skynet;
+        Reaching an average win rate of 0.6 against simple agent in 2v2 radio setting
+    """
+
+    def act(self, obs, action_space):
+        valid_actions = action_prune.get_filtered_actions(obs)
+        if len(valid_actions) == 0:
+            valid_actions.append(constants.Action.Stop.value)
+        action = np.random.choice(valid_actions)
+        return action, 0, 0
+
+    def episode_end(self, reward):
+        pass

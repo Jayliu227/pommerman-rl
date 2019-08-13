@@ -9,4 +9,5 @@ from .simple_agent import SimpleAgent
 from .tensorforce_agent import TensorForceAgent
 
 from .a2c_agent import A2CAgent
+from .a2c_agent import SmartRandomAgent
 from .dqn_agent import DQNAgent
