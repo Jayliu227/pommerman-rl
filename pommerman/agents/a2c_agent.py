@@ -105,12 +105,13 @@ class A2CAgent(BaseAgent):
         self.LAY_BOMB_REWARD = 10
         self.AVOID_BOMB_REWARD = 10
 
-        self.WIN_LOSE_MULTIPLIER = 7
-
         # agent ids
         self.teammate_id = -1
         self.my_id = -1
         self.enemies_ids = [-1, -1]
+
+        # episode entropy
+        self.episode_dist_entropy = 0
 
         # saved action and rewards for each episode
         self.saved_actions = []
@@ -123,7 +124,7 @@ class A2CAgent(BaseAgent):
         self.optimizer = optim.Adam(self.policy.parameters(), lr=3e-3)
         self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=100, gamma=0.99)
 
-        self.model_name = 'vs_simple_%d_5000_episodes' % self.label
+        self.model_name = 'vs_random_%d_5000_episodes' % self.label
 
         if not self.training:
             self.load_model()
@@ -144,6 +145,7 @@ class A2CAgent(BaseAgent):
             # save the chosen action probability and the value of the state
             self.saved_actions.append(SavedAction(m.log_prob(action), state_value))
             self.saved_obs.append(obs)
+            self.episode_dist_entropy += m.entropy()
 
         # TEST:
         # a = action_space.sample()
@@ -179,17 +181,20 @@ class A2CAgent(BaseAgent):
         self.saved_rewards = [0] * len(self.saved_obs)
         # final reward is given by the environment
         if reward < 0:
+            # losing reward
             self.saved_rewards[-1] = -150
         elif reward > 0:
-            self.saved_rewards[-1] = 50
+            # winning reward
+            self.saved_rewards[-1] = 100
         else:
+            # drawing reward
             self.saved_rewards[-1] = -50
 
         # fill in the reshaped rewards for each states except the final state
         self.fill_in_rewards()
 
-        policy_losses = []
-        value_losses = []
+        actor_losses = []
+        critic_losses = []
         returns = []
 
         # calculate discounted sum of rewards for each state
@@ -198,39 +203,32 @@ class A2CAgent(BaseAgent):
             R = r + self.GAMMA * R
             returns.insert(0, R)
 
-        # # TEST:
-        # print('rewards: ', self.saved_rewards)
-        # print('returns: ', returns)
-        #
-        # del self.saved_rewards[:]
-        # del self.saved_actions[:]
-        # del self.saved_obs[:]
-        #
-        # return
-        # END_TEST;
-
         # normalize returns
-
         returns = torch.tensor(returns)
         returns = (returns - returns.mean()) / (returns.std() + eps)
 
         # calculate advantage for each state and loss
         for (log_prob, value), r in zip(self.saved_actions, returns):
             advantage = r - value.item()
-            policy_losses.append(-log_prob * advantage)
-            value_losses.append(F.smooth_l1_loss(value, torch.tensor([[r]])))
+            actor_losses.append(-log_prob * advantage)
+            critic_losses.append(F.smooth_l1_loss(value, torch.tensor([[r]])))
 
         # optimize policy network and value network together
         self.optimizer.zero_grad()
-        policy_loss = torch.stack(policy_losses).sum()
-        value_loss = torch.stack(value_losses).sum()
-        loss = policy_loss + value_loss * 2.0
+        actor_loss = torch.stack(actor_losses).sum()
+        critic_loss = torch.stack(critic_losses).sum()
+        loss = actor_loss + critic_loss - 0.001 * self.episode_dist_entropy
         loss.backward()
         self.optimizer.step()
+
+        print(f'Episode losses [ actor loss <{abs(actor_loss.item()):.02f}>, '
+              f'critic loss <{abs(critic_loss.item()):.02f}>, '
+              f'distribution entropy <{self.episode_dist_entropy.item():.02f}> ]')
 
         del self.saved_rewards[:]
         del self.saved_actions[:]
         del self.saved_obs[:]
+        self.episode_dist_entropy = 0
 
         if self.save_counter % self.SAVE_FREQ == 0:
             self.save_model()
@@ -239,9 +237,6 @@ class A2CAgent(BaseAgent):
         # decaying epsilon
         if self.save_counter > 1000 and self.save_counter % 100 == 0:
             self.EPSILON *= 0.99
-
-        print(f'Episode loss: policy loss <{abs(policy_loss.item()):.02f}>, '
-              f'value loss <{abs(value_loss.item()):.02f}>; ')
 
     def fill_in_rewards(self):
         max_ammo = -1
