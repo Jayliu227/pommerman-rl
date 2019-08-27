@@ -125,7 +125,7 @@ class A2CAgent(BaseAgent):
         self.optimizer = optim.Adam(self.policy.parameters(), lr=3e-3)
         self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=100, gamma=0.99)
 
-        self.model_name = 'vs_random_%d_5000_episodes' % self.label
+        self.model_name = 'af_%d_5000_epi' % self.label
 
         if not self.training:
             self.load_model()
@@ -135,17 +135,29 @@ class A2CAgent(BaseAgent):
         state = self.get_state_from_obs(obs)
         action_values, state_value = self.policy(state)
 
-        m = Categorical(action_values)
-        action = m.sample()
+        # get action filter
+        valid_actions = action_prune.get_filtered_actions(obs)
+        modified_action_values = [0] * 6
+        for i in range(6):
+            if i in valid_actions:
+                modified_action_values[i] = action_values[0][i].item()
+
+        modified_action_values = torch.FloatTensor([modified_action_values])
+
+        # get real and truncated distribution
+        real_dist = Categorical(action_values)
+        modified_dist = Categorical(modified_action_values)
+
+        action = modified_dist.sample()
 
         if self.training:
             # epsilon-greedy
             if np.random.uniform() < self.EPSILON:
                 action = torch.IntTensor([np.random.randint(0, 6)])
             # save the chosen action probability and the value of the state
-            self.saved_actions.append(SavedAction(m.log_prob(action), state_value))
+            self.saved_actions.append(SavedAction(real_dist.log_prob(action), state_value))
             self.saved_obs.append(obs)
-            self.episode_dist_entropy += m.entropy()
+            self.episode_dist_entropy += real_dist.entropy()
 
         # TEST:
         # a = action_space.sample()
