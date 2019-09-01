@@ -5,6 +5,7 @@ from torch.distributions import Categorical
 
 import os
 from pommerman import constants
+from . import action_prune
 
 ######## HYPERPARAMETERS ########
 DEBUG_MODE = False
@@ -12,8 +13,10 @@ DEBUG_MODE = False
 EXTRA_BOMB_REWARD = 0.01
 KICK_ENABLED_REWARD = 0.02
 RANGE_UP_REWARD = 0.01
-AVOID_BOMB_REWARD = 0.002
-LAY_BOMB_REWARD = 0.02
+AVOID_BOMB_REWARD = 0  # 0.002
+LAY_BOMB_REWARD = 0  # 0.02
+
+
 #################################
 
 
@@ -22,6 +25,7 @@ class Memory:
         for storing information about each steps in an episode
     """
 
+    # TODO: put the id information of an agent into the memory
     def __init__(self):
         self.actions = []
         self.obs = []
@@ -35,6 +39,31 @@ class Memory:
         del self.states[:]
         del self.log_probs[:]
         del self.rewards[:]
+
+
+def choose_action(obs, memory, action_probs):
+    prev_two_obs = [None] * 2 if len(memory.obs) < 2 else memory.obs[-2:]
+    pruned_actions = action_prune.get_filtered_actions(obs, prev_two_obs)
+
+    # recalculate probabilities for each action after the action filter.
+    probs = []
+    indices = []
+    for i in range(6):
+        if i in pruned_actions:
+            indices.append(i)
+            probs.append(action_probs[0][i].item())
+
+    probs = F.softmax(torch.tensor(probs), dim=-1).tolist()
+
+    # construct new action probabilities
+    new_action_probs = [0] * 6
+    for index, i in zip(indices, range(len(indices))):
+        new_action_probs[index] = probs[i]
+
+    dist = Categorical(torch.tensor(new_action_probs))
+    action = dist.sample()
+
+    return action
 
 
 class NN(nn.Module):
@@ -82,13 +111,13 @@ class NN(nn.Module):
     def act(self, obs, memory):
         state = get_state_from_obs(obs)
         action_probs = self.action_head(self.common_layer_pass(state))
-        dist = Categorical(action_probs)
-        action = dist.sample()
+
+        action = choose_action(obs, memory, action_probs)
 
         memory.states.append(state)
         memory.obs.append(obs)
         memory.actions.append(action)
-        memory.log_probs.append(dist.log_prob(action))
+        memory.log_probs.append(Categorical(action_probs).log_prob(action))
 
         return action.item()
 
@@ -174,12 +203,25 @@ class PPO:
         self.behavior_policy.load_state_dict(self.policy.state_dict())
 
     def save(self, model_name, directory='saved_model'):
-        if self.counter % self.save_freq == 0:
+        if self.counter % self.save_freq == 0 and self.counter != 0:
             save_model(self.behavior_policy, model_name, directory)
         self.counter += 1
 
 
+def calculate_final_reward(memory, reward, my_id):
+    alive_ids = memory.obs[-1]['alive']
+    if reward > 0 and my_id not in alive_ids:
+        # if the agent died but the team won, then give discounted reward
+        memory.rewards[-1] = reward * 0.6
+    memory.rewards[-1] = reward
+
+
 def fill_in_rewards(memory):
+    """
+        fill in rewards for each states in an episode
+    """
+
+    # set up reward for the final state
     max_ammo = -1
     # traverse from the first to the second of the last
     for i in range(len(memory.obs) - 1):
@@ -288,7 +330,7 @@ def fill_in_rewards(memory):
                         debug_print('REWARD: laid bomb!')
                         break
 
-        memory.rewards[i] = total_reward
+        memory.rewards[i] += total_reward
 
 
 def debug_print(string):
@@ -303,6 +345,9 @@ def save_model(net, model_name, directory='saved_model'):
 
 def load_model(net, model_name, directory='saved_model'):
     path = os.path.join(os.path.dirname(__file__), directory, model_name)
+    if not os.path.exists(path):
+        print('Saved model at <{}> does not exist'.format(path))
+        raise FileNotFoundError
     net.load_state_dict(torch.load(path))
     net.eval()
 
